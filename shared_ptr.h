@@ -15,8 +15,8 @@
  * 	1) releaseCurrent and 
  * 	2) shareOwnership/takeOwnerShip(if dealing with directly underlying object address)
  *
- * If there is any existing shared_ptr object and it requires to update with new underlying object address, it should
- * use both logics.
+ * If there is any existing shared_ptr object and it requires to update with new underlying object address,
+ * it should use both logics.
  * 
  * If new object of shared_ptr is going to be created, just use shareOwnership/takeOwnerShip
  */
