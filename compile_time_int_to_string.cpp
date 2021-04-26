@@ -89,6 +89,46 @@ struct IntToStr
 
 }
 
+namespace approach3
+{
+
+template<int N>
+struct IntToStr
+{
+	constexpr int length(int val)
+	{
+		int len = 0;
+		for (; val != 0; ++len, val /= 10);
+		return len;
+	}
+
+	constexpr IntToStr()
+	{
+		int val = N;
+		uint16_t i = length(N);
+
+		if constexpr (N < 0)
+		{
+			val *= -1;
+			str[0] = '-';
+		}
+		else
+			--i;
+
+		str[i] = 0;
+
+		while (val != 0)
+		{
+			str[i--] = ('0' + (val % 10));
+			val /= 10;
+		}
+	}
+
+	char str[1024] = {};
+};
+
+}
+
 int main()
 {
 	std::cout << approach1::IntToStr<1234>::value << std::endl;
@@ -97,5 +137,7 @@ int main()
 	std::cout << approach2::IntToStr<1234>().str << std::endl;
 	std::cout << approach2::IntToStr<-1234>().str << std::endl;
 
+	std::cout << approach3::IntToStr<1234>().str << std::endl;
+	std::cout << approach3::IntToStr<-1234>().str << std::endl;
 	return 0;
 }
