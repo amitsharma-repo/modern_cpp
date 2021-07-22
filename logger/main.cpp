@@ -7,11 +7,12 @@ void func()
 {
 	for (uint64_t i = 1; i <= 9999999; ++i)
 	{
-		LOG_DBG("This is a debug log, i = " << i);
-		LOG_INF("This is an info log, i = " << i);
-		LOG_WRN("This is a warning log, i = " << i);
-		LOG_ERR("This is an error log, i = " << i);
-		LOG_FAT("This is a fatal log, i = " << i);
+		LOG_TRACE("This is a trace log, i = " << i);
+		LOG_DEBUG("This is a debug log, i = " << i);
+		LOG_INFO("This is an info log, i = " << i);
+		LOG_WARN("This is a warning log, i = " << i);
+		LOG_ERROR("This is an error log, i = " << i);
+		LOG_FATAL("This is a fatal log, i = " << i);
 	}
 }
 

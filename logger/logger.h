@@ -5,22 +5,20 @@
 #include <iosfwd>
 #include <sstream>
 
+
 #define	LOG(level, msg) \
 do { \
-	std::ostringstream oss; \
-	oss << msg << " [" << __FILE__ << ": " << __LINE__ << " " << __PRETTY_FUNCTION__ << "]"; \
-	Logger::instance().log(level, oss); \
-} while (false) \
+	std::ostringstream oss;\
+	oss << msg; \
+	Logger::instance().log(level, oss.str().c_str(), __FILE__, __LINE__, __PRETTY_FUNCTION__); \
+} while(false)
 
-#define	LOG_DBG(msg)	LOG(Logger::DEBUG, msg)
-
-#define	LOG_INF(msg)	LOG(Logger::INFO, msg)
-
-#define	LOG_WRN(msg)	LOG(Logger::WARNING, msg)
-
-#define	LOG_ERR(msg)	LOG(Logger::ERROR, msg)
-
-#define	LOG_FAT(msg)	LOG(Logger::FATAL, msg)
+#define	LOG_TRACE(msg)	LOG(Logger::Level::TRACE, msg)
+#define	LOG_DEBUG(msg)	LOG(Logger::Level::DEBUG, msg)
+#define	LOG_INFO(msg)	LOG(Logger::Level::INFO, msg)
+#define	LOG_WARN(msg)	LOG(Logger::Level::WARNING, msg)
+#define	LOG_ERROR(msg)	LOG(Logger::Level::ERROR, msg)
+#define	LOG_FATAL(msg)	LOG(Logger::Level::FATAL, msg)
 
 constexpr uint64_t KB = 1024;
 constexpr uint64_t MB = 1024 * KB;
@@ -30,9 +28,10 @@ constexpr uint64_t TB = 1024 * GB;
 class Logger
 {
 public:
-	enum Level
+	enum class Level
 	{
-		DEBUG = 1,
+		TRACE,
+		DEBUG,
 		INFO,
 		WARNING,
 		ERROR,
@@ -66,13 +65,13 @@ public:
 		level_ = lvl;
 	}
 
-	void log(Logger::Level const level, std::ostringstream &os);
+	void log(Level const level, const char * const buff, const char * const fileName=nullptr, uint32_t const lineNo=0, const char * const functionName=nullptr);
 
 private:
 	Logger() = default;
 
 	bool consoleFlag_{true};
-	Level level_{DEBUG};
+	Level level_{Level::DEBUG};
 	std::string fileName_;
 	uint64_t fileSize_{0};
 	FilePolicy policy_{NEW_FILE};

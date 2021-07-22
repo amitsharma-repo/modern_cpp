@@ -5,7 +5,7 @@
 #include <fcntl.h>
 #include <sys/mman.h>
 
-#include <cstring>
+#include <string>
 
 #include <thread>
 #include <atomic>
@@ -20,34 +20,55 @@
 
 #include "logger.h"
 
-char const * const getStringLogLevel(Logger::Level const lvl)
-{
-	switch(lvl)
-	{
-		case Logger::INFO:		return "INFO ";
-		case Logger::DEBUG:		return "DEBUG";
-		case Logger::WARNING:	return "WARN ";
-		case Logger::ERROR:		return "ERROR";
-		case Logger::FATAL:		return "FATAL";
-	}
+using namespace std;
 
-	return "";
+bool renameFile(string const &existingFile)
+{
+	static uint32_t counter = 0;
+
+	string const newFile = existingFile + "." + to_string(counter++);
+
+	return rename(existingFile.c_str(), newFile.c_str()) == 0;
 }
 
-void getLocalTimestamp(std::ostringstream &oss)
+void *memcpy(void *dst, const void *src, size_t n)
 {
-	uint64_t timestamp = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::high_resolution_clock::now().time_since_epoch()).count();
+	void *ret = dst;
+	asm volatile("rep movsb" : "+D" (dst) : "c"(n), "S"(src) : "cc", "memory");
+	return ret;
+}
+
+void getCurrentGMTime(char *buff, uint32_t const size)
+{
+	uint64_t const timestamp = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::high_resolution_clock::now().time_since_epoch()).count();
 	std::time_t time = timestamp / 1000000;
+	uint64_t const microseconds = timestamp % 1000000;
 
 	auto gmtime = std::gmtime(&time);
 
-	char buffer[32];
-	strftime(buffer, sizeof(buffer), "%Y-%m-%d %T.", gmtime);
+	char localBuffer[32] = {0};
+	char *const ptr = localBuffer;
 
-	char microseconds[7];
-	sprintf(microseconds, "%06lu", timestamp % 1000000);
+	size_t len = strftime(ptr, sizeof(localBuffer), "%Y%m%d-%T.", gmtime);
+	len += sprintf(ptr + len, "%06lu", microseconds);
 
-	oss << buffer << microseconds;
+	localBuffer[(len < size ? len : size) - 1] = 0;
+
+	memcpy(buff, localBuffer, size);
+}
+
+const char * to_string(Logger::Level const level)
+{
+	switch(level)
+	{
+		case Logger::Level::TRACE:		return "TRACE";
+		case Logger::Level::DEBUG:		return "DEBUG";
+		case Logger::Level::INFO:		return "INFO";
+		case Logger::Level::WARNING:	return "WARN";
+		case Logger::Level::ERROR:		return "ERROR";
+		case Logger::Level::FATAL:		return "FATAL";
+	}
+	return "";
 }
 
 std::string const fileTimeStamp()
@@ -66,7 +87,8 @@ class SpinLock
 public:
 	void lock()
 	{
-		while (locked_.test_and_set(std::memory_order_acquire));
+		while (locked_.test_and_set(std::memory_order_acquire))
+			std::this_thread::yield();
 	}
 
 	void unlock()
@@ -99,7 +121,8 @@ public:
 		if ((currAddress_ + length) > endAddress_)
 			return false;
 
-		currAddress_ = static_cast<char *>(::mempcpy(currAddress_, str, length));
+		currAddress_ = static_cast<char *>(memcpy(currAddress_, str, length));
+		currAddress_ += length;
 		writtenBytes_ += length;
 
 		return true;
@@ -230,32 +253,51 @@ void Logger::setFile(std::string file, uint64_t const size, Logger::FilePolicy c
 	filePtr.reset(new MemoryMappedFile(getLogFileName(fileName_), fileSize_));
 }
 
-void Logger::log(Logger::Level const lvl, std::ostringstream &os)
+std::thread::id getThreadID()
 {
-	if (lvl < level_)
-		return;
+	thread_local static std::thread::id id = std::this_thread::get_id();
+	return id;
+}
 
-	std::string const msg = os.str();
-	os.str("");
-
-	getLocalTimestamp(os);
-	os << "|" << getStringLogLevel(lvl) << "|" << getpid() << "|" << std::this_thread::get_id() << "|" << msg << std::endl;
-
-	if (consoleFlag_)
-		::write(1, os.str().c_str(), os.str().size());
-
-	if (! filePtr)
+void Logger::log(Level const level, const char * const buff, const char * const fileName, uint32_t const lineNo, const char * const functionName)
+{
+	if (level < level_)
 		return;
 
 	std::unique_lock<SpinLock> lock{spinLock};
 
-	bool status = filePtr->write(os.str().c_str(), os.str().size());
+	char timeStamp[32];
+	getCurrentGMTime(timeStamp, size(timeStamp));
+
+	char formattedLogBuffer[1024] = {0}; //TODO: optimize this size
+	char * const ptr = formattedLogBuffer;
+
+	size_t len = sprintf(ptr, "%s|%d|%020llu|[%5s]|%s", timeStamp, getpid(), getThreadID(), to_string(level), buff);
+
+	if (fileName != nullptr)
+		len += sprintf(ptr + len, " [%s: %d", fileName, lineNo);
+
+	if (functionName != nullptr)
+		len += sprintf(ptr + len, ", %s", functionName);
+
+	if (fileName != nullptr)
+		len += sprintf(ptr + len, "]");
+
+	len += sprintf(ptr + len, "\n");
+
+	formattedLogBuffer[len] = 0; //Add this buffer to lockfree queue
+
+	if (consoleFlag_)
+		::write(1, formattedLogBuffer, len);
+
+	if (! filePtr)
+		return;
+
+	bool status = filePtr->write(formattedLogBuffer, len);
 	if (status)
 		return;
 
 	status = (policy_ == Logger::NEW_FILE) ? filePtr->newFile(getNextLogFileName(fileName_)) : filePtr->extendFile();
 	if (status)
-		filePtr->write(os.str().c_str(), os.str().size());
+		filePtr->write(formattedLogBuffer, len);
 }
-
-
