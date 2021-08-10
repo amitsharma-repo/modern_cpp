@@ -40,9 +40,9 @@ void *memcpy(void *dst, const void *src, size_t n)
 
 void getCurrentGMTime(char *buff, uint32_t const size)
 {
-	uint64_t const timestamp = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::high_resolution_clock::now().time_since_epoch()).count();
-	std::time_t time = timestamp / 1000000;
-	uint64_t const microseconds = timestamp % 1000000;
+	uint64_t const timestamp = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::high_resolution_clock::now().time_since_epoch()).count();
+	std::time_t time = timestamp / 1000000000;
+	uint64_t const nanoseconds = timestamp % 1000000000;
 
 	auto gmtime = std::gmtime(&time);
 
@@ -50,9 +50,9 @@ void getCurrentGMTime(char *buff, uint32_t const size)
 	char *const ptr = localBuffer;
 
 	size_t len = strftime(ptr, sizeof(localBuffer), "%Y%m%d-%T.", gmtime);
-	len += sprintf(ptr + len, "%06lu", microseconds);
+	len += sprintf(ptr + len, "%09lu", nanoseconds);
 
-	localBuffer[(len < size ? len : size) - 1] = 0;
+	localBuffer[(len < size ? len : size)] = 0;
 
 	memcpy(buff, localBuffer, size);
 }
@@ -183,7 +183,7 @@ private:
 	{
 		if (startAddress_ != nullptr && startAddress_ != MAP_FAILED)
 		{
-			::msync(startAddress_, currFileSize_ , MAP_SYNC);
+			::msync(startAddress_, currFileSize_, MAP_SYNC);
 			::munmap(startAddress_, currFileSize_);
 		}
 
@@ -206,6 +206,23 @@ private:
 	uint64_t writtenBytes_{0};
 };
 
+class ThreadName
+{
+public:
+	ThreadName()
+	{
+		::pthread_getname_np(::pthread_self(), name_, sizeof(name_));
+	}
+
+	const char * const name() const
+	{
+		return name_;
+	}
+
+private:
+	char name_[128] = {0};
+};
+
 namespace 
 {
 
@@ -214,6 +231,18 @@ uint32_t fileCounter{1};
 std::unique_ptr<MemoryMappedFile> filePtr;
 SpinLock spinLock;
 
+}
+
+const char * const getThreadName()
+{
+	thread_local static ThreadName obj;
+	return obj.name();
+}
+
+std::thread::id getThreadID()
+{
+	thread_local static std::thread::id id = std::this_thread::get_id();
+	return id;
 }
 
 std::string const getLogFileName(std::string const &fileName)
@@ -253,12 +282,6 @@ void Logger::setFile(std::string file, uint64_t const size, Logger::FilePolicy c
 	filePtr.reset(new MemoryMappedFile(getLogFileName(fileName_), fileSize_));
 }
 
-std::thread::id getThreadID()
-{
-	thread_local static std::thread::id id = std::this_thread::get_id();
-	return id;
-}
-
 void Logger::log(Level const level, const char * const buff, const char * const fileName, uint32_t const lineNo, const char * const functionName)
 {
 	if (level < level_)
@@ -272,7 +295,7 @@ void Logger::log(Level const level, const char * const buff, const char * const 
 	char formattedLogBuffer[1024] = {0}; //TODO: optimize this size
 	char * const ptr = formattedLogBuffer;
 
-	size_t len = sprintf(ptr, "%s|%d|%020llu|[%5s]|%s", timeStamp, getpid(), getThreadID(), to_string(level), buff);
+	size_t len = sprintf(ptr, "%s|%d|%020llu|%s|[%5s]|%s", timeStamp, getpid(), getThreadID(), getThreadName(), to_string(level), buff);
 
 	if (fileName != nullptr)
 		len += sprintf(ptr + len, " [%s: %d", fileName, lineNo);

@@ -1,10 +1,14 @@
 #include <thread>
 #include <vector>
+#include <iostream>
+#include <string>
 
 #include "logger.h"
 
-void func()
+void func(std::string name)
 {
+	::pthread_setname_np(pthread_self(), name.c_str());
+
 	for (uint64_t i = 1; i <= 9999999; ++i)
 	{
 		LOG_TRACE("This is a trace log, i = " << i);
@@ -26,7 +30,7 @@ int32_t main()
 	std::vector<std::thread> vec;
 
 	for (uint32_t i = 0; i < threadCount; ++i)
-		vec.emplace_back(func);
+		vec.emplace_back(func, std::to_string(i) + "-Thread");
 
 	for (uint32_t i = 0; i < threadCount; ++i)
 		vec[i].join();
