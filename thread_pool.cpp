@@ -143,7 +143,7 @@ public:
 private:
 	void run()
 	{
-		while(startStopFlag_.load(std::memory_order_acquire))
+		while(startStopFlag_.load(std::memory_order_acquire) || !queue_.empty()) //!queue_.empty() => helps to execute all pending tasks
 		{
 			std::unique_lock<std::mutex> lock{mt_};
 			cv_.wait(lock, [&](){
@@ -153,9 +153,6 @@ private:
 			auto task = std::move(queue_.front());
 			queue_.pop_front();
 
-			if (! task)
-				return;
-
 			lock.unlock();
 
 			task();
@@ -164,9 +161,7 @@ private:
 
 	void shutdown()
 	{
-		std::unique_lock<std::mutex> lock{mt_};
-		for(int i = 0; i < count_; ++i)
-			queue_.push_back({});
+		startStopFlag_.store(false, std::memory_order_release);
 		cv_.notify_all();
 	}
 
