@@ -180,8 +180,10 @@ private:
 			if (queue_.empty())
 				continue;
 
-			MessageType msg = queue_.front();
+			MessageType msg = std::move(queue_.front());
 			queue_.pop_front();
+
+			lock.unlock();
 
 			try
 			{
