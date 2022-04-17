@@ -143,11 +143,15 @@ public:
 	 * Even if you call this function more than one time,
 	 * only first call will be effective.
 	 */
-	void registerHandler(std::function<void(MessageType)> handler)
+	void registerHandler(std::function<void(MessageType)> handler, int32_t coreId=-1)
 	{
 		std::call_once(init_, [&](){
 			handler_ = std::move(handler);
 			workerThread_ = std::thread{&MessageProcessor::process, this};
+			if (!setAffinity(coreId, workerThread_))
+				LOG("Thread couldn't be pinned to core: " << coreId);
+			else
+				LOG("Thread pinned to core: " << coreId);
 		});
 	}
 
@@ -200,6 +204,23 @@ private:
 		}
 	}
 
+	bool setAffinity(int32_t coreId, std::thread &thread)
+	{
+		int cpuCoreCount = __sysconf(_GLIBCXX_USE_SC_NPROCESSORS_ONLN);
+
+		if (coreId < 0 || coreId >= cpuCoreCount)
+			return false;
+
+		cpu_set_t cpuset;
+
+		CPU_ZERO(&cpuset);
+		CPU_SET(coreId, &cpuset);
+
+		pthread_t currentThread = thread.native_handle();
+
+		return pthread_setaffinity_np(currentThread, sizeof(cpu_set_t), &cpuset) == 0;
+	}
+
 	std::thread workerThread_;
 	std::atomic<bool> stop_{false};
 	std::deque<MessageType> queue_;
@@ -214,7 +235,7 @@ int main()
 	MessageProcessor<int> processor;
 	processor.registerHandler([](int i){
 		LOG("Received value: " << i);
-	});
+	}, 2);
 
 	std::thread t([&]() {
 		for (int i = 1; i <= 100; ++i)
