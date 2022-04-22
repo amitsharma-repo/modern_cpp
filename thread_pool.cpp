@@ -147,6 +147,7 @@ std::ostream& operator<<(std::ostream &out, std::tuple<TypeN...> const& theTuple
 #include <condition_variable>
 #include <functional>
 #include <atomic>
+#include <future>
 
 
 /**
@@ -169,28 +170,23 @@ public:
 
 	~ThreadPool() noexcept
 	{
-		LOG("Terminating Threadpool. Wating for all tasks to finish");
-
 		shutdown();
-
-		for (uint32_t i = 0; i < count_; ++i)
-			if (threads_[i].joinable())
-				threads_[i].join();
-
+		waitForPendingTasks();
 		LOG("Threadpool terminated");
 	}
 
 	/**
 	 * function: Task to be schduled
-	 * createNewIfReq: Add new thread when total active tasks are greater than threadpool size
+	 * createNewIfReq: Add a new thread when total queued tasks are greater than threadpool size
 	 */
-	void submitTask(std::function<void()> function, const bool createNewIfReq=false)
+	template <typename F>
+	void submitTask(F &&func, const bool createNewIfReq=false)
 	{
 		if (startFlag_.load(std::memory_order_acquire))
 		{
 			std::unique_lock<std::mutex> lock{mt_};
 
-			queue_.push_back(std::move(function));
+			queue_.push_back(std::forward<std::function<void()>>(func));
 
 			if (createNewIfReq && queue_.size() > count_)
 			{
@@ -203,13 +199,105 @@ public:
 	}
 
 	/**
+	 * function: Task to be schduled
+	 * createNewIfReq: Add a new thread when total queued tasks are greater than threadpool size
+	 * return: std::future. Call std::future<TYPE>::get() once all the threadpool tasks are completed
+	 * otherwise there will be deadlock since std::future<TYPE>::get() is a blocking call.
+	 * Call shutdown() and waitForPendingTasks() before calling std::future<TYPE>::get()
+	 */
+	template <typename F, typename... A, typename = std::enable_if_t<std::is_void_v<std::invoke_result_t<std::decay_t<F>, std::decay_t<A>...>>>>
+	std::future<bool> submitTask(const bool createNewIfReq, const F &func, const A &...args)
+	{
+		std::shared_ptr<std::promise<bool>> task_promise(new std::promise<bool>);
+		std::future<bool> future = task_promise->get_future();
+
+		submitTask([func, args..., task_promise]
+			{
+				try
+				{
+					func(args...);
+					task_promise->set_value(true);
+				}
+				catch (...)
+				{
+					try
+					{
+						task_promise->set_exception(std::current_exception());
+					}
+					catch (...)
+					{
+					}
+				}
+			},
+			createNewIfReq
+		);
+
+		return future;
+	}
+
+	/**
+	 * function: Task to be schduled
+	 * createNewIfReq: Add a new thread when total queued tasks are greater than threadpool size
+	 * return: std::future. Call std::future<TYPE>::get() once all the threadpool tasks are completed
+	 * otherwise there will be deadlock since std::future<TYPE>::get() is a blocking call.
+	 * Call shutdown() and waitForPendingTasks() before calling std::future<TYPE>::get()
+	 */
+	template <typename F, typename... A, typename R = std::invoke_result_t<std::decay_t<F>, std::decay_t<A>...>, typename = std::enable_if_t<!std::is_void_v<R>>>
+	std::future<R> submitTask(const bool createNewIfReq, const F &func, const A &...args)
+	{
+		std::shared_ptr<std::promise<R>> task_promise(new std::promise<R>);
+		std::future<R> future = task_promise->get_future();
+
+		submitTask([func, args..., task_promise]
+			{
+				try
+				{
+					task_promise->set_value(func(args...));
+				}
+				catch (...)
+				{
+					try
+					{
+						task_promise->set_exception(std::current_exception());
+					}
+					catch (...)
+					{
+					}
+				}
+			},
+			createNewIfReq
+		);
+
+		return future;
+	}
+
+	uint32_t threads() const
+	{
+		return count_;
+	}
+
+	uint32_t tasks() const
+	{
+		return queue_.size();
+	}
+
+	/**
 	 * Shutdown threadpool. Task will not be schduled once
 	 * this function is called
 	 */
 	void shutdown()
 	{
+		LOG("Shutting down threadpool");
 		startFlag_.store(false, std::memory_order_release);
 		cv_.notify_all();
+	}
+
+	void waitForPendingTasks()
+	{
+		LOG("Waiting for pending tasks to be completed");
+		for (uint32_t i = 0; i < count_; ++i)
+			if (threads_[i].joinable())
+				threads_[i].join();
 	}
 
 private:
@@ -280,16 +368,28 @@ int main()
 		}
 	});
 
-	pool.shutdown(); //Stop the threadpool. Can't accept task now onwards
-
-	//This task is not going to be scheduled
-	pool.submitTask([](){
-		for (int32_t i = 0; i < 10; i += 5)
+	std::future<bool> val = pool.submitTask(false, [](int n){
+		for (int32_t i = 0; i < n; i += 5)
 		{
 			LOG("Task5 => " << i);
 			std::this_thread::sleep_for(std::chrono::milliseconds(1));
 		}
-	});
+	}, 25);
+
+	std::future<int> val1 = pool.submitTask(true, [](int n){
+		for (int32_t i = 0; i < n; i += 6)
+		{
+			LOG("Task6 => " << i);
+			std::this_thread::sleep_for(std::chrono::milliseconds(1));
+		}
+		return n*2;
+	}, 30);
+
+	pool.shutdown();
+	pool.waitForPendingTasks();
+
+	LOG("Task5 return value: " << val.get());
+	LOG("Task6 return value: " << val1.get());
 
 	return 0;
 }
