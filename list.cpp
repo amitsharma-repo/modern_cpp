@@ -7,6 +7,9 @@ using namespace std;
 template<typename Type>
 class List;
 
+namespace
+{
+
 template<typename Type>
 struct Iterator;
 
@@ -58,7 +61,7 @@ struct Iterator
 		return *this;
 	}
 
-	Iterator operator++(int)
+	const Iterator operator++(int)
 	{
 		Iterator tmp(*this);
 		current_ = current_->next_;
@@ -71,14 +74,14 @@ struct Iterator
 		return *this;
 	}
 
-	Iterator operator--(int)
+	const Iterator operator--(int)
 	{
 		Iterator tmp(*this);
 		current_ = current_->prev_.lock();
 		return tmp;
 	}
 
-	std::shared_ptr<Node<Type>> & operator->()
+	std::shared_ptr<Node<Type>> const & operator->() const
 	{
 		return current_;
 	}
@@ -139,7 +142,7 @@ struct Const_Iterator: public Iterator<Type>
 		return *this;
 	}
 
-	const std::shared_ptr<const Node<Type>> operator->()const
+	const std::shared_ptr<const Node<Type>> & operator->()const
 	{
 		return current_;
 	}
@@ -182,6 +185,8 @@ Iterator<Type> & operator-(Iterator<Type> &lhs, int32_t n)
 {
 	std::advance(lhs, -n);
 	return lhs;
+}
+
 }
 
 template<typename Type>
@@ -258,6 +263,12 @@ public:
 	template<typename ... Args>
 	void emplace(iterator const &position, Args&&... args);
 
+	template<typename ... Args>
+	void emplace_back(Args&&... args);
+
+	template<typename ... Args>
+	void emplace_front(Args&&... args);
+
 	void push_back(Type const &data);
 	void push_front(Type const &data);
 
@@ -276,7 +287,12 @@ public:
 
 	uint32_t size() const noexcept { return length_; }
 	bool empty() const noexcept { return head_ == nullptr && tail_ == nullptr; }
-	void clear() noexcept { head_ = tail_ = nullptr; }
+
+	void clear() noexcept
+	{
+		head_ = tail_ = nullptr;
+		length_ = 0;
+	}
 
 	void swap(List &list)
 	{
@@ -286,14 +302,14 @@ public:
 	}
 
 private:
-	shared_ptr<Node<Type>> createNode(Type data)
+	shared_ptr<Node<Type>> __createNode(Type data)
 	{
 		++length_;
 		return make_shared<Node<Type>>(data);
 	}
 
 	template<typename ... Args>
-	shared_ptr<Node<Type>> createNode(Args&&... args)
+	shared_ptr<Node<Type>> __createNode(Args&&... args)
 	{
 		++length_;
 		return make_shared<Node<Type>>(args...);
@@ -323,13 +339,8 @@ private:
 		return foundNode;
 	}
 
-	bool __remove(Type const &data)
+	void __remove(std::shared_ptr<Node<Type>> &foundNode)
 	{
-		auto foundNode = __find(data);
-
-		if (foundNode == nullptr)
-			return false;
-
 		--length_;
 
 		if (foundNode == head_)
@@ -352,7 +363,49 @@ private:
 			nextDescendent->prev_ = parent;
 		}
 
-		return true;
+		foundNode = nullptr;
+	}
+
+	void __addNodeAtFront(shared_ptr<Node<Type>> &newNode)
+	{
+		if (empty())
+			head_ = tail_ = newNode;
+		else
+		{
+			newNode->next_ = head_;
+			head_->prev_ = newNode;
+			head_ = newNode;
+		}
+	}
+
+	void __addNodeAtEnd(shared_ptr<Node<Type>> &newNode)
+	{
+		if (empty())
+		head_ = tail_ = newNode;
+		else
+		{
+			newNode->prev_ = tail_;
+			tail_->next_ = newNode;
+			tail_ = newNode;
+		}
+	}
+
+	void __insert(shared_ptr<Node<Type>> const &position, shared_ptr<Node<Type>> &newNode)
+	{
+		if (position == head_)
+			__addNodeAtFront(newNode);
+		else if (position == tail_)
+			__addNodeAtEnd(newNode);
+		else
+		{
+			auto parentPostion = position->prev_.lock();
+
+			parentPostion->next_ = newNode;
+			newNode->prev_ = parentPostion;
+
+			newNode->next_ = position;
+			position->prev_ = newNode;
+		}
 	}
 
 	shared_ptr<Node<Type>> head_{nullptr}, tail_{nullptr};
@@ -362,27 +415,12 @@ private:
 template<typename Type>
 void List<Type>::insert(Iterator<Type> const &position, Type const &val, uint32_t const count)
 {
-	auto parentNode = position.current_->prev_.lock(), current = position.current_;
-
-	if (current == head_)
-	{
-		for (uint32_t i = 0; i < count; ++i)
-			push_front(val);
-
-		return;
-	}
+	auto current = position.current_;
 
 	for (uint32_t i = 0; i < count; ++i)
 	{
-		auto newNode = createNode(val);
-
-		parentNode->next_ = newNode;
-		newNode->prev_ = parentNode;
-
-		newNode->next_ = current;
-		current->prev_ = newNode;
-
-		current = newNode;
+		auto newNode = __createNode(val);
+		__insert(current, newNode);
 	}
 }
 
@@ -390,37 +428,38 @@ template<typename Type>
 template<typename ... Args>
 void List<Type>::emplace(Iterator<Type> const &position, Args&&... args)
 {
-	auto current = position.current_;
+	auto newNode = __createNode(args...);
+	__insert(position.current_, newNode);
+}
 
-	auto newNode = createNode(args...);
+template<typename Type>
+template<typename ... Args>
+void List<Type>::emplace_back(Args&&... args)
+{
+	auto newNode = __createNode(args...);
+	__addNodeAtEnd(newNode);
+}
+
+template<typename Type>
+template<typename ... Args>
+void List<Type>::emplace_front(Args&&... args)
+{
+	auto newNode = __createNode(args...);
+	__addNodeAtFront(newNode);
 }
 
 template<typename Type>
 void List<Type>::push_back(Type const &data)
 {
-	auto newNode = createNode(data);
-	if (empty())
-		head_ = tail_ = newNode;
-	else
-	{
-		newNode->prev_ = tail_;
-		tail_->next_ = newNode;
-		tail_ = newNode;
-	}
+	auto newNode = __createNode(data);
+	__addNodeAtEnd(newNode);
 }
 
 template<typename Type>
 void List<Type>::push_front(Type const &data)
 {
-	auto newNode = createNode(data);
-	if (empty())
-		head_ = tail_ = newNode;
-	else
-	{
-		newNode->next_ = head_;
-		head_->prev_ = newNode;
-		head_ = newNode;
-	}
+	auto newNode = __createNode(data);
+	__addNodeAtFront(newNode);
 }
 
 template<typename Type>
@@ -451,7 +490,7 @@ template<typename Type>
 uint32_t List<Type>::remove(Type const &data)
 {
 	uint32_t count = 0;
-	for(;__remove(data); ++count);
+	for(auto node = __find(data); node != nullptr; __remove(node), ++count, node = __find(data));
 	return count;
 }
 
@@ -469,85 +508,3 @@ typename List<Type>::const_iterator List<Type>::find(Type const &data) const
 	return const_iterator(foundNode);
 }
 
-class TestClass
-{
-public:
-	TestClass(int i, float f)
-	{
-		std::cout << "Constructor call with " << i << ", " << f << std::endl;
-	}
-	TestClass(TestClass &)
-	{
-		std::cout << "Copy constructor" << std::endl;
-	}
-};
-
-int32_t main()
-{
-	List<int32_t> list;
-
-	for (int32_t i = 1; i <= 10; ++i)
-		list.push_back(i);
-
-	//list => 1 2 3 4 5 6 7 8 9 10
-
-	for (int32_t i = 11; i <= 20; ++i)
-		list.push_front(i);
-
-	//list => 20 19 18 17 16 15 14 13 12 11 1 2 3 4 5 6 7 8 9 10
-
-	auto itr = list.find(10);
-	list.insert(itr, 100, 3);
-
-	itr = list.find(14);
-	list.insert(itr, 50, 10);
-
-	itr = list.find(20);
-	list.insert(itr, 30, 5);
-
-	List<int> list1 = std::move(list);
-	List<int> list2;
-	list2 = std::move(list1); //only list2 is valid now onward
-
-	std::cout << "[" << list2.size() << "] => ";
-	for(auto const &val: list2)
-		std::cout << val << ", ";
-	std::cout << "\n";
-
-	for (List<int>::iterator first = begin(list2), last = end(list2); first != last; ++first)
-	{
-		*first *= -1;
-	}
-
-	std::cout << "[" << list2.size() << "] => ";
-	for (typename List<int>::const_iterator first = begin(list2), last = end(list2); first != last; ++first)
-		std::cout << *first << ", ";
-	std::cout << "\n";
-
-	typename List<int>::const_iterator first, last;
-	first = begin(list2);
-	last = end(list2);
-
-	std::cout << "[" << list2.size() << "] => ";
-	for (; first != last; ++first)
-		std::cout << *first << ", ";
-	std::cout << "\n";
-
-	uint32_t count = list2.remove(-30);
-	count += list2.remove(-50);
-	count += list2.remove(-100);
-
-	std::cout << "Removed count: " << count << ", size: " << list2.size() <<  std::endl;
-
-	first = begin(list2);
-	last = end(list2);
-
-	std::cout << "[" << list2.size() << "] => ";
-	for (; first != last; ++first)
-		std::cout << *first << ", ";
-	std::cout << "\n";
-
-	std::cout << "\nTerminating main()..." << std::endl;
-
-	return 0;
-}
