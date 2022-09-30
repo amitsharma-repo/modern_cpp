@@ -1,5 +1,4 @@
 #include <iostream>
-#include <memory>
 #include <functional>
 
 using namespace std;
@@ -15,6 +14,12 @@ struct Iterator;
 
 template<typename Type>
 struct Const_Iterator;
+
+template<typename Type>
+struct Node;
+
+template<typename Type>
+using NodePtr = Node<Type> *;
 
 template<typename Type>
 struct Node
@@ -34,8 +39,7 @@ private:
 	friend struct Const_Iterator<Type>;
 
 	Type data_{};
-	weak_ptr<Node> prev_{};
-	shared_ptr<Node> next_{};
+	NodePtr<Type> prev_{nullptr}, next_{nullptr};
 };
 
 template<typename Type>
@@ -51,7 +55,7 @@ struct Iterator
 
 	Iterator() = default;
 
-	Iterator(std::shared_ptr<Node<Type>> const &current): current_{current}
+	Iterator(NodePtr<Type> current): current_{current}
 	{
 	}
 
@@ -70,18 +74,18 @@ struct Iterator
 
 	Iterator & operator--()
 	{
-		current_ = current_->prev_.lock();
+		current_ = current_->prev_;
 		return *this;
 	}
 
 	const Iterator operator--(int)
 	{
 		Iterator tmp(*this);
-		current_ = current_->prev_.lock();
+		current_ = current_->prev_;
 		return tmp;
 	}
 
-	std::shared_ptr<Node<Type>> const & operator->() const
+	NodePtr<Type> operator->() const
 	{
 		return current_;
 	}
@@ -109,7 +113,7 @@ struct Iterator
 	friend class List<Type>;
 
 protected:
-	std::shared_ptr<Node<Type>> current_{nullptr};
+	NodePtr<Type> current_{nullptr};
 };
 
 template<typename Type>
@@ -128,7 +132,7 @@ struct Const_Iterator: public Iterator<Type>
 
 	Const_Iterator() = default;
 
-	Const_Iterator(std::shared_ptr<Node<Type>> const &current): Iterator<Type>(current)
+	Const_Iterator(NodePtr<Type> current): Iterator<Type>(current)
 	{
 	}
 
@@ -142,7 +146,7 @@ struct Const_Iterator: public Iterator<Type>
 		return *this;
 	}
 
-	const std::shared_ptr<const Node<Type>> & operator->()const
+	const Node<const Type> * operator->()const
 	{
 		return current_;
 	}
@@ -197,6 +201,11 @@ public:
 	using const_iterator = Const_Iterator<Type>;
 
 	List() = default;
+
+	~List()
+	{
+		__removeAll();
+	}
 
 	List(uint32_t size, Type const &val=Type{})
 	{
@@ -290,11 +299,12 @@ public:
 
 	void clear() noexcept
 	{
+		__removeAll();
 		head_ = tail_ = nullptr;
 		length_ = 0;
 	}
 
-	void swap(List &list)
+	void swap(List &list) noexcept
 	{
 		std::swap(list.head_, head_);
 		std::swap(list.tail_, tail_);
@@ -302,24 +312,30 @@ public:
 	}
 
 private:
-	shared_ptr<Node<Type>> __createNode(Type data)
+	NodePtr<Type> __createNode(Type data)
 	{
 		++length_;
-		return make_shared<Node<Type>>(data);
+		return new Node<Type>(data);
 	}
 
 	template<typename ... Args>
-	shared_ptr<Node<Type>> __createNode(Args&&... args)
+	NodePtr<Type> __createNode(Args&&... args)
 	{
 		++length_;
-		return make_shared<Node<Type>>(args...);
+		return new Node<Type>(args...);
 	}
 
-	shared_ptr<Node<Type>> __find(Type const &data) const
+	void __release(const NodePtr<Type> node)
 	{
-		shared_ptr<Node<Type>> foundNode{nullptr};
+		--length_;
+		delete node;
+	}
 
-		for (auto headTemp = head_, tailTemp = tail_; headTemp != tailTemp; headTemp = headTemp->next_, tailTemp = tailTemp->prev_.lock())
+	NodePtr<Type> __find(Type const &data) const
+	{
+		NodePtr<Type> foundNode{nullptr};
+
+		for (NodePtr<Type> headTemp = head_, tailTemp = tail_; headTemp != tailTemp; headTemp = headTemp->next_, tailTemp = tailTemp->prev_)
 		{
 			if (headTemp->data_ == data)
 			{
@@ -339,34 +355,46 @@ private:
 		return foundNode;
 	}
 
-	void __remove(std::shared_ptr<Node<Type>> &foundNode)
+	void __removeAll()
 	{
-		--length_;
+		for (NodePtr<Type> headTemp = head_; headTemp != nullptr; )
+		{
+			const NodePtr<Type> node = headTemp;
+			headTemp = headTemp->next_;
+			__release(node);
+		}
+	}
 
-		if (foundNode == head_)
+	void __remove(const NodePtr<Type> foundNode)
+	{
+		if (foundNode == head_ && foundNode == tail_)
+		{
+			head_ = tail_ = nullptr;
+		}
+		else if (foundNode == head_)
 		{
 			head_ = head_->next_;
-			head_->prev_.lock() = nullptr;
+			head_->prev_ = nullptr;
 		}
 		else if (foundNode == tail_)
 		{
-			auto parent = tail_->prev_.lock();
+			auto parent = tail_->prev_;
 			tail_ = parent;
 			parent->next_ = nullptr;
 		}
 		else
 		{
-			auto parent = foundNode->prev_.lock();
+			auto parent = foundNode->prev_;
 			auto nextDescendent = foundNode->next_;
 
 			parent->next_ = nextDescendent;
 			nextDescendent->prev_ = parent;
 		}
 
-		foundNode = nullptr;
+		__release(foundNode);
 	}
 
-	void __addNodeAtFront(shared_ptr<Node<Type>> &newNode)
+	void __addNodeAtFront(const NodePtr<Type> newNode)
 	{
 		if (empty())
 			head_ = tail_ = newNode;
@@ -378,10 +406,10 @@ private:
 		}
 	}
 
-	void __addNodeAtEnd(shared_ptr<Node<Type>> &newNode)
+	void __addNodeAtEnd(const NodePtr<Type> newNode)
 	{
 		if (empty())
-		head_ = tail_ = newNode;
+			head_ = tail_ = newNode;
 		else
 		{
 			newNode->prev_ = tail_;
@@ -390,7 +418,7 @@ private:
 		}
 	}
 
-	void __insert(shared_ptr<Node<Type>> const &position, shared_ptr<Node<Type>> &newNode)
+	void __insert(const NodePtr<Type> position, const NodePtr<Type> newNode)
 	{
 		if (position == head_)
 			__addNodeAtFront(newNode);
@@ -398,7 +426,7 @@ private:
 			__addNodeAtEnd(newNode);
 		else
 		{
-			auto parentPostion = position->prev_.lock();
+			auto parentPostion = position->prev_;
 
 			parentPostion->next_ = newNode;
 			newNode->prev_ = parentPostion;
@@ -408,7 +436,8 @@ private:
 		}
 	}
 
-	shared_ptr<Node<Type>> head_{nullptr}, tail_{nullptr};
+	NodePtr<Type> head_{nullptr};
+	NodePtr<Type> tail_{nullptr};
 	uint32_t length_{0};
 };
 
@@ -465,25 +494,41 @@ void List<Type>::push_front(Type const &data)
 template<typename Type>
 void List<Type>::pop_back()
 {
+	NodePtr<Type> node{nullptr};
+
 	if (head_ == tail_)
+	{
+		node = head_;
 		head_ = tail_ = nullptr;
+	}
 	else
 	{
-		tail_->prev_.lock()->next_ = nullptr;
-		tail_ = tail_->prev_.lock();
+		node = tail_;
+		tail_ = tail_->prev_;
+		tail_->next_ = nullptr;
 	}
+
+	release(node);
 }
 
 template<typename Type>
 void List<Type>::pop_front()
 {
+	NodePtr<Type> node{nullptr};
+
 	if (head_ == tail_)
+	{
+		node = head_;
 		head_ = tail_ = nullptr;
+	}
 	else
 	{
-		head_->next_->prev_.reset();
+		node = head_;
 		head_ = head_->next_;
+		head_->prev = nullptr;
 	}
+
+	release(node);
 }
 
 template<typename Type>
@@ -507,4 +552,3 @@ typename List<Type>::const_iterator List<Type>::find(Type const &data) const
 	auto foundNode = __find(data);
 	return const_iterator(foundNode);
 }
-
